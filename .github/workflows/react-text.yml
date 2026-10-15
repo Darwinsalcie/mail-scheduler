@@ -1,0 +1,58 @@
+name: React deploy test
+
+on:
+  push:
+    branches: [Development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: react-deploy-development
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-${{ github.sha }}
+          path: dist
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, windows, development]
+    timeout-minutes: 10
+    environment: development
+    env:
+      DEPLOY_PATH: D:\mail-scheduler
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-${{ github.sha }}
+          path: ./dist
+
+      - name: Copy to local folder
+        shell: pwsh
+        run: |
+          robocopy ./dist $env:DEPLOY_PATH /MIR /NFL /NDL /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy falló: $LASTEXITCODE" }
+          $global:LASTEXITCODE = 0

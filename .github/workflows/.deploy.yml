@@ -1,0 +1,134 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [Development, Staging, main]
+  pull_request:
+    branches: [Development, Staging, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_VERSION: 8.0.x
+  PROJECT_PATH: PresentationLayer/PresentationLayer.csproj
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  # ─────────────── CI: compilar, testear, publicar ───────────────
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      target: ${{ steps.env.outputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target environment
+        id: env
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          case "$BRANCH" in
+            main)    echo "target=production"  >> "$GITHUB_OUTPUT" ;;
+            Staging) echo "target=staging"     >> "$GITHUB_OUTPUT" ;;
+            *)       echo "target=development" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Test
+        run: >
+          dotnet test --no-build -c Release
+          --logger "trx;LogFileName=results.trx"
+          --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ./TestResults
+          retention-days: 7
+
+      - name: Publish
+        run: dotnet publish ${{ env.PROJECT_PATH }} --no-build -c Release -o ./publish
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ github.sha }}
+          path: ./publish
+          retention-days: 14
+          if-no-files-found: error
+
+  # ─────────────── CD: desplegar según la rama ───────────────
+  deploy:
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, windows, '${{ needs.build.outputs.target }}']
+    timeout-minutes: 20
+    environment:
+      name: ${{ needs.build.outputs.target }}
+      url: ${{ vars.APP_URL }}
+    concurrency:
+      group: deploy-${{ needs.build.outputs.target }}
+      cancel-in-progress: false
+    env:
+      APP_POOL: ${{ vars.IIS_APP_POOL }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-${{ github.sha }}
+          path: ./publish
+
+      - name: Deploy to IIS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module WebAdministration
+
+          Stop-WebAppPool -Name $env:APP_POOL
+          while ((Get-WebAppPoolState -Name $env:APP_POOL).Value -ne 'Stopped') { Start-Sleep 1 }
+
+          try {
+            robocopy ./publish $env:DEPLOY_PATH /MIR /XF appsettings.*.json web.config /NFL /NDL /NP
+            if ($LASTEXITCODE -ge 8) { throw "robocopy falló con código $LASTEXITCODE" }
+            $global:LASTEXITCODE = 0
+          }
+          finally {
+            Start-WebAppPool -Name $env:APP_POOL
+          }
+
+      - name: Health check
+        shell: pwsh
+        run: |
+          $ok = $false
+          foreach ($i in 1..10) {
+            try {
+              $r = Invoke-WebRequest -Uri $env:HEALTHCHECK_URL -UseBasicParsing -TimeoutSec 10
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch { Write-Host "Intento $i falló: $($_.Exception.Message)" }
+            Start-Sleep 5
+          }
+          if (-not $ok) { throw "La app no respondió 200 en $env:HEALTHCHECK_URL" }
