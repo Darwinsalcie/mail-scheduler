@@ -2,7 +2,7 @@ name: React deploy test
 
 on:
   push:
-    branches: [Development]
+    branches: [development]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mail-scheduler-frontend
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +30,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: mail-scheduler-frontend/pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
@@ -34,7 +38,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: web-${{ github.sha }}
-          path: dist
+          path: mail-scheduler-frontend/dist
           if-no-files-found: error
 
   deploy:
@@ -51,7 +55,7 @@ jobs:
           path: ./dist
 
       - name: Copy to local folder
-        shell: pwsh
+        shell: powershell
         run: |
           robocopy ./dist $env:DEPLOY_PATH /MIR /NFL /NDL /NP
           if ($LASTEXITCODE -ge 8) { throw "robocopy falló: $LASTEXITCODE" }
