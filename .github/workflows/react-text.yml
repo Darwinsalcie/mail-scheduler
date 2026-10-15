@@ -3,14 +3,16 @@ name: React deploy test
 on:
   push:
     branches: [development]
+  pull_request:
+    branches: [development]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: react-deploy-development
-  cancel-in-progress: false
+  group: react-deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -54,6 +56,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name == 'push'
     runs-on: [self-hosted, windows, development]
     timeout-minutes: 10
     environment: development
