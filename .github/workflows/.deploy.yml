@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [Development, Staging, main]
+    branches: [development, staging, main]
   pull_request:
-    branches: [Development, Staging, main]
+    branches: [development, staging, main]
   workflow_dispatch:
 
 permissions:
@@ -36,9 +36,9 @@ jobs:
           BRANCH: ${{ github.ref_name }}
         run: |
           case "$BRANCH" in
-            main)    echo "target=production"  >> "$GITHUB_OUTPUT" ;;
-            Staging) echo "target=staging"     >> "$GITHUB_OUTPUT" ;;
-            *)       echo "target=development" >> "$GITHUB_OUTPUT" ;;
+            main)             echo "target=production"  >> "$GITHUB_OUTPUT" ;;
+            staging|Staging)  echo "target=staging"     >> "$GITHUB_OUTPUT" ;;
+            *)                echo "target=development" >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Setup .NET SDK
